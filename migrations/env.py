@@ -5,9 +5,10 @@ from sqlalchemy import pool
 
 from alembic import context
 
+from app.database import engine
 from app.models.base import Base
 from app.models.user import User
-from app.database import engine
+from app.models.caregiver_profile import CaregiverProfile
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
