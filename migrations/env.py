@@ -12,6 +12,7 @@ from app.models.caregiver_profile import CaregiverProfile
 from app.models.care_recipient import CareRecipient
 from app.models.availability import Availability
 from app.models.caregiver_location import CaregiverLocation
+from app.models.booking import Booking
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
