@@ -3,3 +3,4 @@ sqlalchemy
 psycopg
 python-dotenv
 alembic
+pydantic
