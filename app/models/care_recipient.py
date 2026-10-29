@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.user import User
+    from app.models.booking import Booking
 
 class CareRecipient(Base):
     __tablename__ = 'care_recipient'
@@ -18,3 +19,4 @@ class CareRecipient(Base):
     care_notes : Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     user : Mapped["User"] = relationship(back_populates="care_recipients")
+    bookings: Mapped[list["Booking"]] = relationship(back_populates="care_recipient")

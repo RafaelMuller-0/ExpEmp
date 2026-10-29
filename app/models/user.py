@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.models.care_recipient import CareRecipient
     from app.models.caregiver_profile import CaregiverProfile
+    from app.models.booking import Booking
 
 
 class User(Base):
@@ -21,3 +22,4 @@ class User(Base):
     created_at : Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda:datetime.now(timezone.utc))
     caregiver_profile: Mapped["CaregiverProfile | None"] = relationship(back_populates="user")
     care_recipients: Mapped[list["CareRecipient"]] = relationship(back_populates="user")
+    bookings_as_requester: Mapped[list["Booking"]] = relationship(back_populates="requester")
