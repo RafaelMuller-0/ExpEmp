@@ -1,9 +1,10 @@
 from fastapi import Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from fastapi.security import OAuth2PasswordRequestForm
 
 from app.models.user import User
-from app.security import hash_password, verify_password, create_access_token
+from app.security import hash_password, verify_password, create_access_token, get_current_user
 from app.database import get_session
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
 
@@ -36,16 +37,19 @@ def create_user(user: UserCreate, db: Session = Depends(get_session)):
     return new_user
 
 @router.post("/login", response_model=Token)
-def login(user: UserLogin, db: Session = Depends(get_session)):
-    stmt = select(User).where(User.email == user.email)
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_session)):
+    stmt = select(User).where(User.email == form_data.username)
     existing_user = db.scalar(stmt)
     if existing_user is None:
         raise HTTPException(
             status_code=401,
             detail="E-mail ou senha incorretos",
-            headers = headers
+            headers=headers
         )
-    password_valid = verify_password(user.password, existing_user.password_hash)
+    password_valid = verify_password(
+        form_data.password,
+        existing_user.password_hash
+    )
     if not password_valid:
         raise HTTPException(
             status_code=401,
@@ -53,5 +57,12 @@ def login(user: UserLogin, db: Session = Depends(get_session)):
             headers=headers
         )
     access_token = create_access_token(existing_user.id)
-    return {"access_token": access_token,"token_type": "bearer"
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
     }
+
+@router.get("/me", response_model=UserResponse)
+def read_current_user(user : User = Depends(get_current_user)):
+    return user
