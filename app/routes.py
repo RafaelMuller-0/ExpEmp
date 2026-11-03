@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from app.models.user import User
 from app.security import hash_password, verify_password, create_access_token, get_current_user
 from app.database import get_session
-from app.schemas.user import UserCreate, UserResponse, UserLogin, Token
+from app.schemas.user import UserCreate, UserResponse, UserLogin, Token, UserUpdate
 
 router = APIRouter()
 
@@ -65,4 +65,35 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @router.get("/me", response_model=UserResponse)
 def read_current_user(user : User = Depends(get_current_user)):
+    return user
+
+@router.put("/me", response_model=UserResponse)
+def update_current_user(
+    user_data: UserUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    update_data = user_data.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum dado foi enviado para atualização"
+        )
+    if "email" in update_data:
+        stmt = select(User).where(
+            User.email == update_data["email"],
+            User.id != user.id
+        )
+        existing_user = db.scalar(stmt)
+        if existing_user:
+            raise HTTPException(
+                status_code=409,
+                detail="E-mail já cadastrado"
+            )
+    for field, value in update_data.items():
+        setattr(user, field, value)
+
+    db.commit()
+    db.refresh(user)
+
     return user
