@@ -4,3 +4,5 @@ psycopg
 python-dotenv
 alembic
 pydantic
+pyjwt
+pwdlib[argon2]
