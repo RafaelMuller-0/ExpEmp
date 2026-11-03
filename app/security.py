@@ -3,9 +3,12 @@ import jwt
 from os import getenv
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
+from fastapi.security import OAuth2PasswordBearer
+from jwt.exceptions import InvalidTokenError
+from fastapi import HTTPException, status
 
 load_dotenv()
-
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 password_hash = PasswordHash.recommended()
 
 def hash_password(password : str):
