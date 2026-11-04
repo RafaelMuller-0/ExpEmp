@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from fastapi.security import OAuth2PasswordRequestForm
+
 from app.models.user import User
 from app.security import hash_password, verify_password, create_access_token, get_current_user
 from app.database import get_session
@@ -12,6 +13,8 @@ from app.models.availability import Availability
 from app.schemas.availability import AvailabilityCreate, AvailabilityResponse, AvailabilityUpdate
 from app.models.care_recipient import CareRecipient
 from app.schemas.care_recipient import CareRecipientCreate, CareRecipientResponse, CareRecipientUpdate
+from app.models.booking import Booking
+from app.schemas.booking import BookingCreate, BookingResponse, BookingStatusUpdate
 
 router = APIRouter()
 
@@ -20,6 +23,7 @@ headers={"WWW-Authenticate": "Bearer"}
 async def root():
     return {"message": "Hello World"}
 
+"""User routes"""
 @router.post("/user", response_model=UserResponse, status_code= 201)
 def create_user(user: UserCreate, db: Session = Depends(get_session)):
     stmt = select(User).where(User.email == user.email)
@@ -98,6 +102,7 @@ def update_current_user(user_data: UserUpdate,user: User = Depends(get_current_u
 
     return user
 
+"""caregiver_profile routes"""
 @router.post("/caregiver-profile",response_model=CaregiverProfileResponse,status_code=201)
 def create_caregiver_profile(profile_data: CaregiverProfileCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
@@ -153,6 +158,7 @@ def update_caregiver_profile(profile_data: CaregiverProfileUpdate,user: User = D
     db.refresh(profile)
     return profile
 
+"""availability routes"""
 @router.post("/availability",response_model=AvailabilityResponse,status_code=201)
 def create_availability(availability_data: AvailabilityCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
@@ -246,6 +252,7 @@ def update_availability(availability_id: int,availability_data: AvailabilityUpda
     db.refresh(availability)
     return availability
 
+"""Care_recipient routes"""
 @router.post("/care-recipients",response_model=CareRecipientResponse,status_code=201)
 def create_care_recipient(recipient_data: CareRecipientCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     new_recipient = CareRecipient(
@@ -300,3 +307,167 @@ def delete_care_recipient(recipient_id: int,user: User = Depends(get_current_use
 
     db.delete(recipient)
     db.commit()
+
+""" Booking routes"""
+@router.post("/bookings",response_model=BookingResponse,status_code=201)
+def create_booking(booking_data: BookingCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    recipient_stmt = select(CareRecipient).where(CareRecipient.id == booking_data.care_recipient_id,CareRecipient.created_by_user_id == user.id    )
+    recipient = db.scalar(recipient_stmt)
+    if recipient is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Assistido não encontrado"
+        )
+
+    caregiver_stmt = select(CaregiverProfile).where(CaregiverProfile.id == booking_data.caregiver_profile_id,CaregiverProfile.approval_status == "approved")
+    caregiver = db.scalar(caregiver_stmt)
+    if caregiver is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Cuidador não encontrado ou não aprovado"
+        )
+    if booking_data.end_at <= booking_data.start_at:
+        raise HTTPException(
+            status_code=400,
+            detail="O horário de término deve ser posterior ao início"
+        )
+    availability_stmt = select(Availability).where(Availability.caregiver_profile_id == caregiver.id,Availability.start_at <= booking_data.start_at,Availability.end_at >= booking_data.end_at)
+    availability = db.scalar(availability_stmt)
+    if availability is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Cuidador não possui disponibilidade para esse horário"
+        )
+
+    conflict_stmt = select(Booking).where(Booking.caregiver_profile_id == caregiver.id,Booking.status.in_(["pending", "accepted"]),Booking.start_at < booking_data.end_at,Booking.end_at > booking_data.start_at)
+    conflict = db.scalar(conflict_stmt)
+    if conflict is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Cuidador já possui um agendamento nesse horário"
+        )
+
+    new_booking = Booking(
+        requester_user_id=user.id,
+        care_recipient_id=recipient.id,
+        caregiver_profile_id=caregiver.id,
+        start_at=booking_data.start_at,
+        end_at=booking_data.end_at,
+        address=booking_data.address,
+        status="pending"
+    )
+
+    db.add(new_booking)
+    db.commit()
+    db.refresh(new_booking)
+
+    return new_booking
+
+@router.get("/bookings/me",response_model=list[BookingResponse])
+def read_my_bookings(user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(Booking).where(Booking.requester_user_id == user.id    )
+    bookings = db.scalars(stmt).all()
+    return bookings
+
+@router.get("/bookings/caregiver/me",response_model=list[BookingResponse])
+def read_caregiver_bookings(user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    profile_stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(profile_stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+
+    stmt = select(Booking).where(Booking.caregiver_profile_id == profile.id)
+    bookings = db.scalars(stmt).all()
+    return bookings
+
+@router.put("/bookings/{booking_id}/status",response_model=BookingResponse)
+def update_booking_status(booking_id: int,status_data: BookingStatusUpdate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    profile_stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(profile_stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+
+    stmt = select(Booking).where(Booking.id == booking_id,Booking.caregiver_profile_id == profile.id    )
+    booking = db.scalar(stmt)
+    if booking is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Agendamento não encontrado"
+        )
+    if status_data.status not in ["accepted", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status deve ser accepted ou rejected"
+        )
+    if booking.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Este agendamento não está mais pendente"
+        )
+
+    booking.status = status_data.status
+
+    db.commit()
+    db.refresh(booking)
+
+    return booking
+
+@router.put("/bookings/{booking_id}/cancel",response_model=BookingResponse)
+def cancel_booking(booking_id: int,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(Booking).where(Booking.id == booking_id,Booking.requester_user_id == user.id    )
+    booking = db.scalar(stmt)
+
+    if booking is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Agendamento não encontrado"
+        )
+    if booking.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Somente agendamentos pendentes podem ser cancelados"
+        )
+
+    booking.status = "cancelled"
+    db.commit()
+    db.refresh(booking)
+    return booking
+
+@router.put("/bookings/{booking_id}/complete",response_model=BookingResponse)
+def complete_booking(booking_id: int,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    profile_stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(profile_stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+
+    stmt = select(Booking).where(Booking.id == booking_id,Booking.caregiver_profile_id == profile.id    )
+    booking = db.scalar(stmt)
+
+    if booking is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Agendamento não encontrado"
+        )
+
+    if booking.status != "accepted":
+        raise HTTPException(
+            status_code=400,
+            detail="Somente agendamentos aceitos podem ser finalizados"
+        )
+
+    booking.status = "completed"
+
+    db.commit()
+    db.refresh(booking)
+
+    return booking
+
