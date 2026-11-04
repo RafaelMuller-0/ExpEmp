@@ -7,12 +7,13 @@ from app.models.user import User
 from app.security import hash_password, verify_password, create_access_token, get_current_user
 from app.database import get_session
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token, UserUpdate
+from app.models.caregiver_profile import CaregiverProfile
+from app.schemas.caregiver_profile import CaregiverProfileCreate, CaregiverProfileResponse, CaregiverProfileUpdate
 
 router = APIRouter()
 
 headers={"WWW-Authenticate": "Bearer"}
 
-@router.get("/")
 async def root():
     return {"message": "Hello World"}
 
@@ -97,3 +98,76 @@ def update_current_user(
     db.refresh(user)
 
     return user
+
+@router.post(
+    "/caregiver-profile",
+    response_model=CaregiverProfileResponse,
+    status_code=201
+)
+def create_caregiver_profile(
+    profile_data: CaregiverProfileCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    existing_profile = db.scalar(stmt)
+    if existing_profile:
+        raise HTTPException(
+            status_code=409,
+            detail="Usuário já possui um perfil de cuidador"
+        )
+    new_profile = CaregiverProfile(
+        user_id=user.id,
+        bio=profile_data.bio,
+        experience_years=profile_data.experience_years,
+        approval_status="pending"
+    )
+
+    db.add(new_profile)
+    db.commit()
+    db.refresh(new_profile)
+
+    return new_profile
+
+@router.get("/caregiver-profile/me", response_model=CaregiverProfileResponse)
+def read_current_caregiver_profile(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+    return profile
+
+@router.put(
+    "/caregiver-profile/me",
+    response_model=CaregiverProfileResponse
+)
+def update_caregiver_profile(
+    profile_data: CaregiverProfileUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+
+    update_data = profile_data.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum dado foi enviado para atualização"
+        )
+    for field, value in update_data.items():
+        setattr(profile, field, value)
+    db.commit()
+    db.refresh(profile)
+    return profile
