@@ -1,7 +1,8 @@
 from fastapi import Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from fastapi.security import OAuth2PasswordRequestForm
+from datetime import datetime
 
 from app.models.user import User
 from app.security import hash_password, verify_password, create_access_token, get_current_user
@@ -10,11 +11,12 @@ from app.schemas.user import UserCreate, UserResponse, UserLogin, Token, UserUpd
 from app.models.caregiver_profile import CaregiverProfile
 from app.schemas.caregiver_profile import CaregiverProfileCreate, CaregiverProfileResponse, CaregiverProfileUpdate
 from app.models.availability import Availability
-from app.schemas.availability import AvailabilityCreate, AvailabilityResponse, AvailabilityUpdate
+from app.schemas.availability import AvailabilityCreate, AvailabilityResponse, AvailabilityUpdate, FreeIntervalResponse
 from app.models.care_recipient import CareRecipient
 from app.schemas.care_recipient import CareRecipientCreate, CareRecipientResponse, CareRecipientUpdate
 from app.models.booking import Booking
 from app.schemas.booking import BookingCreate, BookingResponse, BookingStatusUpdate
+from app.schemas.caregiver_search import CaregiverSearchResponse
 
 router = APIRouter()
 
@@ -471,3 +473,155 @@ def complete_booking(booking_id: int,user: User = Depends(get_current_user),db: 
 
     return booking
 
+"""caregiver_search routes"""
+@router.get("/caregivers", response_model=list[CaregiverSearchResponse])
+def search_caregivers(min_experience: int | None = None, name: str | None = None, db: Session = Depends(get_session), start_at: datetime | None = None, end_at: datetime | None = None,):
+    if start_at is not None and end_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Informe também o horário de término"
+        )
+
+    if end_at is not None and start_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Informe também o horário de início"
+        )
+
+    if start_at is not None and end_at is not None:
+        if end_at <= start_at:
+            raise HTTPException(
+                status_code=400,
+                detail="O horário de término deve ser posterior ao início"
+            )
+    if min_experience is not None and min_experience < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="A experiência mínima não pode ser negativa"
+        )
+
+    stmt = (select(CaregiverProfile, User).join(User, CaregiverProfile.user_id == User.id).where(CaregiverProfile.approval_status == "approved"))
+    if min_experience is not None:
+        stmt = stmt.where(CaregiverProfile.experience_years >= min_experience)
+    if name is not None:
+        stmt = stmt.where(User.name.ilike(f"%{name}%"))
+
+    if start_at is not None and end_at is not None:
+        stmt = stmt.where(
+            select(Availability.id)
+            .where(
+                Availability.caregiver_profile_id == CaregiverProfile.id,
+                Availability.start_at <= start_at,
+                Availability.end_at >= end_at
+            )
+            .exists()
+        )
+    stmt = stmt.order_by(desc(CaregiverProfile.experience_years))
+    results = db.execute(stmt).all()
+
+    return [
+        {
+            "caregiver_profile_id": profile.id,
+            "user_id": user.id,
+            "name": user.name,
+            "bio": profile.bio,
+            "experience_years": profile.experience_years
+        }
+        for profile, user in results
+    ]
+
+@router.get("/caregivers/{caregiver_profile_id}",response_model=list[FreeIntervalResponse])
+def get_caregiver(caregiver_profile_id: int,db: Session = Depends(get_session)):
+    stmt = (
+        select(CaregiverProfile, User)
+        .join(User, CaregiverProfile.user_id == User.id)
+        .where(
+            CaregiverProfile.id == caregiver_profile_id,
+            CaregiverProfile.approval_status == "approved"
+        )
+    )
+
+    result = db.execute(stmt).first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Cuidador não encontrado"
+        )
+
+    profile, user = result
+
+    return {
+        "caregiver_profile_id": profile.id,
+        "user_id": user.id,
+        "name": user.name,
+        "bio": profile.bio,
+        "experience_years": profile.experience_years
+    }
+
+@router.get("/caregivers/{caregiver_profile_id}/availability",response_model=list[FreeIntervalResponse])
+def get_caregiver_availability(caregiver_profile_id: int,db: Session = Depends(get_session)):
+    caregiver_stmt = select(CaregiverProfile).where(
+        CaregiverProfile.id == caregiver_profile_id,
+        CaregiverProfile.approval_status == "approved"
+    )
+
+    caregiver = db.scalar(caregiver_stmt)
+
+    if caregiver is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Cuidador não encontrado"
+        )
+
+    availability_stmt = (
+        select(Availability)
+        .where(
+            Availability.caregiver_profile_id == caregiver.id
+        )
+        .order_by(Availability.start_at)
+    )
+
+    bookings_stmt = (
+        select(Booking)
+        .where(
+            Booking.caregiver_profile_id == caregiver.id,
+            Booking.status.in_(["pending", "accepted"])
+        )
+        .order_by(Booking.start_at)
+    )
+
+    bookings = db.scalars(bookings_stmt).all()
+
+    free_intervals = []
+
+    for availability in db.scalars(availability_stmt).all():
+        current_start = availability.start_at
+
+        availability_end = availability.end_at
+
+        for booking in bookings:
+            if booking.start_at >= availability_end:
+                continue
+
+            if booking.end_at <= current_start:
+                continue
+
+            if booking.start_at > current_start:
+                free_end = min(booking.start_at, availability_end)
+
+                if current_start < free_end:
+                    free_intervals.append({
+                        "start_at": current_start,
+                        "end_at": free_end
+                    })
+
+            if booking.end_at > current_start:
+                current_start = booking.end_at
+
+        if current_start < availability_end:
+            free_intervals.append({
+                "start_at": current_start,
+                "end_at": availability_end
+            })
+    return free_intervals

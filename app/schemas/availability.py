@@ -16,3 +16,7 @@ class AvailabilityResponse(BaseModel):
 class AvailabilityUpdate(BaseModel):
     start_at: datetime | None = None
     end_at: datetime | None = None
+
+class FreeIntervalResponse(BaseModel):
+    start_at: datetime
+    end_at: datetime
