@@ -10,6 +10,8 @@ from app.models.caregiver_profile import CaregiverProfile
 from app.schemas.caregiver_profile import CaregiverProfileCreate, CaregiverProfileResponse, CaregiverProfileUpdate
 from app.models.availability import Availability
 from app.schemas.availability import AvailabilityCreate, AvailabilityResponse, AvailabilityUpdate
+from app.models.care_recipient import CareRecipient
+from app.schemas.care_recipient import CareRecipientCreate, CareRecipientResponse, CareRecipientUpdate
 
 router = APIRouter()
 
@@ -243,3 +245,58 @@ def update_availability(availability_id: int,availability_data: AvailabilityUpda
     db.commit()
     db.refresh(availability)
     return availability
+
+@router.post("/care-recipients",response_model=CareRecipientResponse,status_code=201)
+def create_care_recipient(recipient_data: CareRecipientCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    new_recipient = CareRecipient(
+        created_by_user_id=user.id,
+        name=recipient_data.name,
+        care_notes=recipient_data.care_notes
+    )
+    db.add(new_recipient)
+    db.commit()
+    db.refresh(new_recipient)
+    return new_recipient
+
+@router.get("/care-recipients",response_model=list[CareRecipientResponse])
+def read_my_care_recipients(user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CareRecipient).where(CareRecipient.created_by_user_id == user.id)
+    recipients = db.scalars(stmt).all()
+    return recipients
+
+@router.put("/care-recipients/{recipient_id}",response_model=CareRecipientResponse)
+def update_care_recipient(recipient_id: int,recipient_data: CareRecipientUpdate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CareRecipient).where(CareRecipient.id == recipient_id,CareRecipient.created_by_user_id == user.id)
+    recipient = db.scalar(stmt)
+    if recipient is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Assistido não encontrado"
+        )
+
+    update_data = recipient_data.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum dado foi enviado para atualização"
+        )
+
+    for field, value in update_data.items():
+        setattr(recipient, field, value)
+
+    db.commit()
+    db.refresh(recipient)
+    return recipient
+
+@router.delete("/care-recipients/{recipient_id}",status_code=204)
+def delete_care_recipient(recipient_id: int,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CareRecipient).where(CareRecipient.id == recipient_id,CareRecipient.created_by_user_id == user.id    )
+    recipient = db.scalar(stmt)
+    if recipient is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Assistido não encontrado"
+        )
+
+    db.delete(recipient)
+    db.commit()
