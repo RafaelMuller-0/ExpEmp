@@ -2,13 +2,14 @@ from fastapi import Depends, HTTPException, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from fastapi.security import OAuth2PasswordRequestForm
-
 from app.models.user import User
 from app.security import hash_password, verify_password, create_access_token, get_current_user
 from app.database import get_session
 from app.schemas.user import UserCreate, UserResponse, UserLogin, Token, UserUpdate
 from app.models.caregiver_profile import CaregiverProfile
 from app.schemas.caregiver_profile import CaregiverProfileCreate, CaregiverProfileResponse, CaregiverProfileUpdate
+from app.models.availability import Availability
+from app.schemas.availability import AvailabilityCreate, AvailabilityResponse, AvailabilityUpdate
 
 router = APIRouter()
 
@@ -69,11 +70,7 @@ def read_current_user(user : User = Depends(get_current_user)):
     return user
 
 @router.put("/me", response_model=UserResponse)
-def update_current_user(
-    user_data: UserUpdate,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
-):
+def update_current_user(user_data: UserUpdate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     update_data = user_data.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(
@@ -99,16 +96,8 @@ def update_current_user(
 
     return user
 
-@router.post(
-    "/caregiver-profile",
-    response_model=CaregiverProfileResponse,
-    status_code=201
-)
-def create_caregiver_profile(
-    profile_data: CaregiverProfileCreate,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
-):
+@router.post("/caregiver-profile",response_model=CaregiverProfileResponse,status_code=201)
+def create_caregiver_profile(profile_data: CaregiverProfileCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
     existing_profile = db.scalar(stmt)
     if existing_profile:
@@ -130,10 +119,7 @@ def create_caregiver_profile(
     return new_profile
 
 @router.get("/caregiver-profile/me", response_model=CaregiverProfileResponse)
-def read_current_caregiver_profile(
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
-):
+def read_current_caregiver_profile(user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
     profile = db.scalar(stmt)
     if profile is None:
@@ -143,15 +129,8 @@ def read_current_caregiver_profile(
         )
     return profile
 
-@router.put(
-    "/caregiver-profile/me",
-    response_model=CaregiverProfileResponse
-)
-def update_caregiver_profile(
-    profile_data: CaregiverProfileUpdate,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
-):
+@router.put("/caregiver-profile/me",response_model=CaregiverProfileResponse)
+def update_caregiver_profile(profile_data: CaregiverProfileUpdate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
     stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
     profile = db.scalar(stmt)
     if profile is None:
@@ -171,3 +150,96 @@ def update_caregiver_profile(
     db.commit()
     db.refresh(profile)
     return profile
+
+@router.post("/availability",response_model=AvailabilityResponse,status_code=201)
+def create_availability(availability_data: AvailabilityCreate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+    if availability_data.end_at <= availability_data.start_at:
+        raise HTTPException(
+            status_code=400,
+            detail="O horário de término deve ser posterior ao início"
+        )
+    new_availability = Availability(
+        caregiver_profile_id=profile.id,
+        start_at=availability_data.start_at,
+        end_at=availability_data.end_at
+    )
+    db.add(new_availability)
+    db.commit()
+    db.refresh(new_availability)
+    return new_availability
+
+@router.get("/availability/me",response_model=list[AvailabilityResponse])
+def read_my_availabilities(user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+    stmt = select(Availability).where(Availability.caregiver_profile_id == profile.id)
+    availabilities = db.scalars(stmt).all()
+    return availabilities
+
+@router.delete("/availability/{availability_id}", status_code=204)
+def delete_availability(availability_id: int,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CaregiverProfile).where(
+        CaregiverProfile.user_id == user.id
+    )
+    profile = db.scalar(stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+    stmt = select(Availability).where(Availability.id == availability_id,Availability.caregiver_profile_id == profile.id)
+    availability = db.scalar(stmt)
+    if availability is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Disponibilidade não encontrada"
+        )
+    db.delete(availability)
+    db.commit()
+
+@router.put("/availability/{availability_id}",response_model=AvailabilityResponse)
+def update_availability(availability_id: int,availability_data: AvailabilityUpdate,user: User = Depends(get_current_user),db: Session = Depends(get_session)):
+    stmt = select(CaregiverProfile).where(CaregiverProfile.user_id == user.id)
+    profile = db.scalar(stmt)
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Perfil de cuidador não encontrado"
+        )
+    stmt = select(Availability).where(Availability.id == availability_id,Availability.caregiver_profile_id == profile.id)
+    availability = db.scalar(stmt)
+    if availability is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Disponibilidade não encontrada"
+        )
+    update_data = availability_data.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum dado foi enviado para atualização"
+        )
+    new_start = update_data.get("start_at", availability.start_at)
+    new_end = update_data.get("end_at", availability.end_at)
+    if new_start is None or new_end is None or new_end <= new_start:
+        raise HTTPException(
+            status_code=400,
+            detail="O horário de término deve ser posterior ao início"
+        )
+    for field, value in update_data.items():
+        setattr(availability, field, value)
+    db.commit()
+    db.refresh(availability)
+    return availability
